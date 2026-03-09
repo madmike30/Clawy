@@ -1,0 +1,51 @@
+name: Deploy to OCI Server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'workspace/**'
+      - 'scripts/**'
+
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy workspace files
+        run: |
+          rsync -avz --delete \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
+            workspace/ \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:~/.openclaw/workspace/
+
+      - name: Deploy scripts
+        run: |
+          if [ -d "scripts" ] && [ "$(ls -A scripts/)" ]; then
+            rsync -avz \
+              -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
+              scripts/ \
+              ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:~/
+          fi
+
+      - name: Restart gateway
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            "systemctl --user restart openclaw-gateway.service && sleep 2 && systemctl --user is-active openclaw-gateway.service"
+
+      - name: Cleanup
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
